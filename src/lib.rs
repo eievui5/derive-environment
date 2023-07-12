@@ -3,6 +3,22 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::*;
 
+/// Generates a `load_environment()` function that will populate each field from environment variables.
+///
+/// This uses `.parse()` so make sure all members implement `FromStr`.
+/// Note that `load_environment()` is not a constructor.
+///
+/// # Examples
+/// 
+/// ```
+/// use derive_environment::Environment;
+/// 
+/// #[derive(Environment)]
+/// #[prefix(HL7_)] // or whatever you want
+/// pub struct Config {
+///     // ...
+/// }
+/// ```
 #[proc_macro_derive(Environment, attributes(prefix))]
 pub fn environment(input: TokenStream) -> TokenStream {
     // Parse the input tokens into a syntax tree
