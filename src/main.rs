@@ -18,6 +18,10 @@ struct Struct {
     ignored: UnparsableStruct, 
     #[env(nested)]
     sub: SubStruct,
+    #[env(extendable)]
+    array: Vec<u32>,
+    #[env(nested_extendable)]
+    sub_structs: Vec<SubStruct>,
 }
 
 fn main() {
