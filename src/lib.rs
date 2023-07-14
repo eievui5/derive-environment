@@ -23,7 +23,11 @@ use syn::*;
 ///
 /// If a field implements the `Extend` trait, like `Vec` or `VecDeque`,
 /// you can use the `#[env(extendable)]` annotation to configure the field by index.
+/// 
 /// If the collection contains a nested field, you can use `#[env(nested_extendable)]` instead.
+/// Note that types are constructed in-place, and some fields may be missing from the environment.
+/// Because of this, the contents of the collection must implement the `Default` trait.
+/// You can derive it with `#[derive(Default)]`.
 ///
 /// # Examples
 /// 
