@@ -11,11 +11,11 @@ struct SubStruct {
 }
 
 #[derive(Clone, Debug, Default, Environment)]
-#[prefix(TEST_PREFIX_)]
+#[env(prefix = TEST_PREFIX_)]
 struct Struct {
     name: String,
     #[env(ignore)]
-    ignored: UnparsableStruct, 
+    ignored: UnparsableStruct,
     #[env(nested)]
     sub: SubStruct,
     #[env(extendable)]
