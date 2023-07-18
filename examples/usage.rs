@@ -11,7 +11,7 @@ struct SubStruct {
 }
 
 #[derive(Clone, Debug, Default, Environment)]
-#[env(prefix = TEST_PREFIX_)]
+#[env(from_env, prefix = "TEST_PREFIX_")]
 struct Struct {
     name: String,
     #[env(ignore)]
@@ -20,13 +20,11 @@ struct Struct {
     sub: SubStruct,
     #[env(extendable)]
     array: Vec<u32>,
-    #[env(nested_extendable)]
+    #[env(nested, extendable)]
     sub_structs: Vec<SubStruct>,
 }
 
 fn main() {
-    let mut test = Struct::default();
-    println!("{test:?}");
-    test.load_environment().unwrap();
-    println!("{test:?}");
+    let test = Struct::from_env().unwrap();
+    println!("{test:#?}");
 }
