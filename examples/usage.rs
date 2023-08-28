@@ -19,7 +19,9 @@ struct Struct {
     #[env(nested)]
     sub: SubStruct,
     #[env(extendable)]
-    array: Vec<String>,
+    array: Vec<u8>,
+    #[env(extendable)]
+    array_strings: Vec<String>,
     #[env(nested, extendable)]
     sub_structs: Vec<SubStruct>,
 }

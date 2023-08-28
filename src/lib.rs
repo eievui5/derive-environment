@@ -270,7 +270,7 @@ fn env_from_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
             if let ::std::result::Result::Ok(variable) = ::std::env::var(colon_var) {
                 match variable.parse() {
                     ::std::result::Result::Ok(value) => {
-                        self.#fields.extend([value].iter().cloned());
+                        self.#fields.push(value);
                         found_match = true;
                     }
                     ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", colon_var, msg.to_string())),
@@ -278,7 +278,7 @@ fn env_from_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
             } else if let ::std::result::Result::Ok(variable) = ::std::env::var(underscore_var) {
                 match variable.parse() {
                     ::std::result::Result::Ok(value) => {
-                        self.#fields.extend([value].iter().cloned());
+                        self.#fields.push(value);
                         found_match = true;
                     }
                     ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", underscore_var, msg.to_string())),
