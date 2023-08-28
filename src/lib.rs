@@ -1,5 +1,5 @@
 use convert_case::{Case, Casing};
-use darling::{ast, FromField, FromDeriveInput};
+use darling::{ast, FromDeriveInput, FromField};
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::*;
@@ -14,7 +14,7 @@ struct EnvArgs {
     #[darling(default)]
     prefix: ::std::string::String,
     #[darling(default)]
-    from_env: bool
+    from_env: bool,
 }
 
 #[derive(Debug, FromField)]
@@ -127,18 +127,15 @@ pub fn environment(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
 
     let args = match EnvArgs::from_derive_input(&input) {
         Ok(v) => v,
-        Err(e) => { return e.write_errors().into(); }
+        Err(e) => {
+            return e.write_errors().into();
+        }
     };
 
     let name = input.ident;
     let prefix = args.prefix;
 
-    let fields = args
-        .data
-        .as_ref()
-        .take_struct()
-        .unwrap()
-        .fields;
+    let fields = args.data.as_ref().take_struct().unwrap().fields;
 
     let from_env = if args.from_env {
         quote! {
@@ -147,7 +144,7 @@ pub fn environment(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 let mut s = Self::default();
                 s.load_environment()?;
                 Ok(s)
-            } 
+            }
         }
     } else {
         quote! {}
@@ -215,8 +212,16 @@ fn convert_fields<'a>(
     impl Iterator<Item = String> + 'a,
 ) {
     (
-        fields.iter().filter(|f| f.ident.is_some()).filter(filter).map(to_fields),
-        fields.iter().filter(|f| f.ident.is_some()).filter(filter).map(to_variables),
+        fields
+            .iter()
+            .filter(|f| f.ident.is_some())
+            .filter(filter)
+            .map(to_fields),
+        fields
+            .iter()
+            .filter(|f| f.ident.is_some())
+            .filter(filter)
+            .map(to_variables),
     )
 }
 
@@ -240,9 +245,7 @@ fn env_from_parseable(fields: &[&EnvFieldArgs]) -> TokenStream {
 }
 
 fn env_from_nested(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| {
-        f.nested && !f.extendable
-    });
+    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| f.nested && !f.extendable);
 
     quote! {#({
         let colon_var = ::std::format!("{prefix}{}:", #vars);
@@ -257,9 +260,7 @@ fn env_from_nested(fields: &[&EnvFieldArgs]) -> TokenStream {
 }
 
 fn env_from_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| {
-        !f.nested && f.extendable
-    });
+    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| !f.nested && f.extendable);
 
     quote! {#({
         for i in 0.. {
@@ -269,7 +270,7 @@ fn env_from_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
             if let ::std::result::Result::Ok(variable) = ::std::env::var(colon_var) {
                 match variable.parse() {
                     ::std::result::Result::Ok(value) => {
-                        self.#fields.extend([value].iter());
+                        self.#fields.extend([value].iter().cloned());
                         found_match = true;
                     }
                     ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", colon_var, msg.to_string())),
@@ -277,7 +278,7 @@ fn env_from_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
             } else if let ::std::result::Result::Ok(variable) = ::std::env::var(underscore_var) {
                 match variable.parse() {
                     ::std::result::Result::Ok(value) => {
-                        self.#fields.extend([value].iter());
+                        self.#fields.extend([value].iter().cloned());
                         found_match = true;
                     }
                     ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", underscore_var, msg.to_string())),
@@ -290,9 +291,7 @@ fn env_from_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
 }
 
 fn env_from_nested_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| {
-        f.nested && f.extendable
-    });
+    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| f.nested && f.extendable);
 
     quote! {#({
         for i in 0.. {
