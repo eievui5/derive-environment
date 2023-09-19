@@ -7,23 +7,21 @@ struct UnparsableStruct;
 
 #[derive(Clone, Debug, Default, Environment)]
 struct SubStruct {
-    port: u16,
+    value: u16,
 }
 
 #[derive(Clone, Debug, Default, Environment)]
 #[env(from_env, prefix = "TEST_PREFIX_")]
 struct Struct {
-    name: String,
+    parseable: String,
     #[env(ignore)]
     ignored: UnparsableStruct,
     #[env(nested)]
-    sub: SubStruct,
-    #[env(extendable)]
-    array: Vec<u8>,
-    #[env(extendable)]
-    array_strings: Vec<String>,
-    #[env(nested, extendable)]
-    sub_structs: Vec<SubStruct>,
+    nested: SubStruct,
+    vector: Vec<String>,
+    #[env(nested)]
+    nested_vector: Vec<SubStruct>,
+    optional: Option<String>,
 }
 
 fn main() {

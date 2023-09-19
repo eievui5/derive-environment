@@ -28,8 +28,6 @@ struct EnvFieldArgs {
     ignore: bool,
     #[darling(default)]
     nested: bool,
-    #[darling(default)]
-    extendable: bool,
 }
 
 /// Generates a `load_environment()` function that will populate each field from environment variables.
@@ -151,11 +149,6 @@ pub fn environment(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     };
 
     let parseable_fields = env_from_parseable(&fields);
-    let optional_fields = env_from_optional(&fields);
-    let nested_fields = env_from_nested(&fields);
-    let optional_nested_fields = env_from_optional_nested(&fields);
-    let extendable_fields = env_from_extendable(&fields);
-    let nested_extendable = env_from_nested_extendable(&fields);
 
     // Build the output, possibly using quasi-quotation
     let expanded = quote! {
@@ -178,14 +171,7 @@ pub fn environment(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
                 // Tracks whether or not a variable was found.
                 // Important for nested extendables.
                 let mut found_match = false;
-
                 #parseable_fields
-                #optional_fields
-                #nested_fields
-                #optional_nested_fields
-                #extendable_fields
-                #nested_extendable
-
                 ::std::result::Result::Ok(found_match)
             }
         }
@@ -195,7 +181,7 @@ pub fn environment(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     expanded.into()
 }
 
-fn to_variables(field: &&EnvFieldArgs) -> String {
+fn to_variable(field: &&EnvFieldArgs) -> String {
     field
         .ident
         .clone()
@@ -204,166 +190,101 @@ fn to_variables(field: &&EnvFieldArgs) -> String {
         .to_case(Case::UpperSnake)
 }
 
-fn to_fields(field: &&EnvFieldArgs) -> Ident {
+fn to_field(field: &&EnvFieldArgs) -> Ident {
     field.ident.clone().unwrap()
 }
 
-fn convert_fields<'a>(
-    fields: &'a [&'a EnvFieldArgs],
-    filter: &'a (impl Fn(&&&EnvFieldArgs) -> bool + 'a),
-) -> (
-    impl Iterator<Item = Ident> + 'a,
-    impl Iterator<Item = String> + 'a,
-) {
-    (
-        fields
-            .iter()
-            .filter(|f| f.ident.is_some())
-            .filter(filter)
-            .map(to_fields),
-        fields
-            .iter()
-            .filter(|f| f.ident.is_some())
-            .filter(filter)
-            .map(to_variables),
-    )
-}
-
-fn is_option(f: &EnvFieldArgs) -> bool {
+fn get_type(f: &EnvFieldArgs) -> String {
     if let Type::Path(TypePath { qself: _, path }) = &f.ty {
-        path.segments.first().unwrap().ident == "Option"
+        path.segments.first().unwrap().ident.to_string()
     } else {
-        false
+        String::new()
     }
 }
 
 fn env_from_parseable(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| {
-        !(f.ignore || f.nested || f.extendable || is_option(f))
-    });
+    let mut tokens = TokenStream::new();
 
-    quote! {#({
-        let name = ::std::format!("{prefix}{}", #vars);
-        if let ::std::result::Result::Ok(variable) = ::std::env::var(&name) {
-            match variable.parse() {
-                ::std::result::Result::Ok(value) => {
-                    found_match = true;
-                    self.#fields = value;
-                }
-                ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", name, msg.to_string())),
-            }
-        }
-    })*}
-}
+    for field in fields {
+        let ty = get_type(field);
+        let f = to_field(field);
+        let var = to_variable(field);
 
-fn env_from_optional(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| {
-        !(f.ignore || f.nested || f.extendable) && is_option(f)
-    });
+        // This is made a lot more complicated by the fact that we very little information about the types we recieve.
+        // At best, we can guess using the first segment of the type path.
+        match (field, ty.as_str()) {
+            // Ignored fields
+            (EnvFieldArgs { ignore: true , .. }, _) => {}
+            // Vector & Nested
+            (EnvFieldArgs { nested: true, .. }, "Vec") => tokens.extend(quote! {
+                for i in 0.. {
+                    let underscore_var = &::std::format!("{prefix}{}__{i}__", #var);
 
-    quote! {#({
-        let name = ::std::format!("{prefix}{}", #vars);
-        if let ::std::result::Result::Ok(variable) = ::std::env::var(&name) {
-            match variable.parse() {
-                ::std::result::Result::Ok(value) => {
-                    found_match = true;
-                    self.#fields = Some(value);
-                }
-                ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", name, msg.to_string())),
-            }
-        }
-    })*}
-}
+                    self.#f.extend([Default::default()]);
 
-fn env_from_nested(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| {
-        f.nested && !f.extendable && !is_option(f)
-    });
-
-    quote! {#({
-        let colon_var = ::std::format!("{prefix}{}:", #vars);
-        let underscore_var = ::std::format!("{prefix}{}__", #vars);
-        if self.#fields.load_environment_with_prefix(&colon_var)? {
-            found_match = true;
-        }
-        if self.#fields.load_environment_with_prefix(&underscore_var)? {
-            found_match = true;
-        }
-    })*}
-}
-
-fn env_from_optional_nested(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| {
-        f.nested && !f.extendable && is_option(f)
-    });
-
-    quote! {#({
-        let colon_var = ::std::format!("{prefix}{}:", #vars);
-        let underscore_var = ::std::format!("{prefix}{}__", #vars);
-        if let Some(field) = &mut self.#fields {
-            if field.load_environment_with_prefix(&colon_var)? || self.#fields.as_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
-                found_match = true;
-            }
-        } else {
-            self.#fields = Some(Default::default());
-            if self.#fields.as_mut().unwrap().load_environment_with_prefix(&colon_var)? || self.#fields.as_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
-                found_match = true;
-            } else {
-                self.#fields = None;
-            }
-        }
-    })*}
-}
-
-fn env_from_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| !f.nested && f.extendable);
-
-    quote! {#({
-        for i in 0.. {
-            let colon_var = &::std::format!("{prefix}{}:{i}", #vars);
-            let underscore_var = &::std::format!("{prefix}{}__{i}", #vars);
-
-            if let ::std::result::Result::Ok(variable) = ::std::env::var(colon_var) {
-                match variable.parse() {
-                    ::std::result::Result::Ok(value) => {
-                        self.#fields.push(value);
+                    if self.#f.last_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
                         found_match = true;
+                    } else {
+                        self.#f.pop();
+                        break;
                     }
-                    ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", colon_var, msg.to_string())),
                 }
-            } else if let ::std::result::Result::Ok(variable) = ::std::env::var(underscore_var) {
-                match variable.parse() {
-                    ::std::result::Result::Ok(value) => {
-                        self.#fields.push(value);
-                        found_match = true;
+            }),
+            (EnvFieldArgs { .. }, "Vec") => tokens.extend(quote! {
+                for i in 0.. {
+                    let underscore_var = &::std::format!("{prefix}{}__{i}", #var);
+
+                    if let ::std::result::Result::Ok(variable) = ::std::env::var(underscore_var) {
+                        match variable.parse() {
+                            ::std::result::Result::Ok(value) => {
+                                self.#f.push(value);
+                                found_match = true;
+                            }
+                            ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", underscore_var, msg.to_string())),
+                        }
+                    } else {
+                        break;
                     }
-                    ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", underscore_var, msg.to_string())),
                 }
-            } else {
-                break;
-            }
+            }),
+            // Nested
+            (EnvFieldArgs { nested: true, .. }, _) => tokens.extend(quote! {
+                let underscore_var = ::std::format!("{prefix}{}__", #var);
+
+                if self.#f.load_environment_with_prefix(&underscore_var)? {
+                    found_match = true;
+                }
+            }),
+            // Optional & Parseable
+            (EnvFieldArgs { .. }, "Option") => tokens.extend(quote! {
+                let name = ::std::format!("{prefix}{}", #var);
+
+                if let ::std::result::Result::Ok(variable) = ::std::env::var(&name) {
+                    match variable.parse() {
+                        ::std::result::Result::Ok(value) => {
+                            found_match = true;
+                            self.#f = Some(value);
+                        }
+                        ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{name}: {msg}")),
+                    }
+                }
+            }),
+            // Parseable
+            (EnvFieldArgs { .. }, _) => tokens.extend(quote! {
+                let name = ::std::format!("{prefix}{}", #var);
+
+                if let ::std::result::Result::Ok(variable) = ::std::env::var(&name) {
+                    match variable.parse() {
+                        ::std::result::Result::Ok(value) => {
+                            found_match = true;
+                            self.#f = value;
+                        }
+                        ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{name}: {msg}")),
+                    }
+                }
+            }),
         }
-    })*}
-}
+    }
 
-fn env_from_nested_extendable(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let (fields, vars) = convert_fields(fields, &|f: &&&EnvFieldArgs| f.nested && f.extendable);
-
-    quote! {#({
-        for i in 0.. {
-            let colon_var = &::std::format!("{prefix}{}:{i}:", #vars);
-            let underscore_var = &::std::format!("{prefix}{}__{i}__", #vars);
-
-            self.#fields.extend([Default::default()]);
-
-            if self.#fields.last_mut().unwrap().load_environment_with_prefix(&colon_var)? {
-                found_match = true;
-            } else if self.#fields.last_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
-                found_match = true;
-            } else {
-                self.#fields.pop();
-                break;
-            }
-        }
-    })*}
+    tokens
 }
