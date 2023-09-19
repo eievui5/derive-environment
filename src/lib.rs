@@ -247,16 +247,25 @@ fn env_from_parseable(fields: &[&EnvFieldArgs]) -> TokenStream {
                     }
                 }
             }),
-            // Nested
-            (EnvFieldArgs { nested: true, .. }, _) => tokens.extend(quote! {
+            // Optional & Nested
+            (EnvFieldArgs { nested: true, .. }, "Option") => tokens.extend(quote! {
+                let colon_var = ::std::format!("{prefix}{}:", #var);
                 let underscore_var = ::std::format!("{prefix}{}__", #var);
-
-                if self.#f.load_environment_with_prefix(&underscore_var)? {
-                    found_match = true;
+                if let Some(field) = &mut self.#f {
+                    if field.load_environment_with_prefix(&colon_var)? || self.#f.as_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
+                        found_match = true;
+                    }
+                } else {
+                    self.#f = Some(Default::default());
+                    if self.#f.as_mut().unwrap().load_environment_with_prefix(&colon_var)? || self.#f.as_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
+                        found_match = true;
+                    } else {
+                        self.#f = None;
+                    }
                 }
             }),
             // Optional & Parseable
-            (EnvFieldArgs { .. }, "Option") => tokens.extend(quote! {
+            (EnvFieldArgs { nested: false, .. }, "Option") => tokens.extend(quote! {
                 let name = ::std::format!("{prefix}{}", #var);
 
                 if let ::std::result::Result::Ok(variable) = ::std::env::var(&name) {
@@ -267,6 +276,14 @@ fn env_from_parseable(fields: &[&EnvFieldArgs]) -> TokenStream {
                         }
                         ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{name}: {msg}")),
                     }
+                }
+            }),
+            // Nested
+            (EnvFieldArgs { nested: true, .. }, _) => tokens.extend(quote! {
+                let underscore_var = ::std::format!("{prefix}{}__", #var);
+
+                if self.#f.load_environment_with_prefix(&underscore_var)? {
+                    found_match = true;
                 }
             }),
             // Parseable
