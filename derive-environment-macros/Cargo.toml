@@ -1,19 +1,19 @@
 [package]
-name = "derive_environment"
+name = "derive_environment_macros"
 version = "1.0.0"
 edition = "2021"
 description = "A Rust library for modifying structs via environment variables"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/eievui5/derive-environment"
 
-[dependencies]
-thiserror = "1.0.48"
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies.derive_environment_macros]
-version = "1.0.0"
-path = "derive-environment-macros"
+[dependencies]
+convert_case = "0.6.0"
+darling = "0.20.3"
+proc-macro2 = "1.0.66"
+quote = "1.0.29"
+syn = "2.0.23"
 
-[workspace]
-members = ["derive-environment-macros"]
+[lib]
+proc-macro = true

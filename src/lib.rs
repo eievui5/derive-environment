@@ -1,225 +1,157 @@
 #![doc = include_str!("../README.md")]
+#![warn(missing_docs)]
 
-use convert_case::{Case, Casing};
-use darling::{ast, FromDeriveInput, FromField};
-use proc_macro2::TokenStream;
-use quote::quote;
-use syn::*;
+pub use derive_environment_macros::FromEnv;
+use std::{ffi::OsString, path::PathBuf, str::FromStr};
 
-#[derive(Debug, FromDeriveInput)]
-#[darling(attributes(env), supports(struct_named))]
-#[allow(dead_code)]
-struct EnvArgs {
-    ident: syn::Ident,
-    generics: syn::Generics,
-    data: ast::Data<(), EnvFieldArgs>,
-    #[darling(default)]
-    prefix: ::std::string::String,
-    #[darling(default)]
-    from_env: bool,
-}
-
-#[derive(Debug, FromField)]
-#[darling(attributes(env))]
-#[allow(dead_code)]
-struct EnvFieldArgs {
-    ident: Option<syn::Ident>,
-    ty: syn::Type,
-
-    #[darling(default)]
-    ignore: bool,
-    #[darling(default)]
-    nested: bool,
-}
-
-/// Generates a `load_environment()` function that will populate each field from environment variables.
+/// Errors generated when populating a structure from the environment.
 ///
-/// This uses `.parse()` so make sure all members implement `FromStr`.
-/// Note that `load_environment()` is not a constructor.
-#[proc_macro_derive(Environment, attributes(prefix, env))]
-pub fn environment(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    // Parse the input tokens into a syntax tree
-    let input = parse_macro_input!(input as DeriveInput);
-
-    let args = match EnvArgs::from_derive_input(&input) {
-        Ok(v) => v,
-        Err(e) => {
-            return e.write_errors().into();
-        }
-    };
-
-    let name = input.ident;
-    let prefix = args.prefix;
-
-    let fields = args.data.as_ref().take_struct().unwrap().fields;
-
-    let from_env = if args.from_env {
-        quote! {
-            /// Creates a new object with its fields initialized using the environment.
-            pub fn from_env() -> ::std::result::Result<Self, ::std::string::String> {
-                let mut s = Self::default();
-                s.load_environment()?;
-                Ok(s)
-            }
-        }
-    } else {
-        quote! {}
-    };
-
-    let parseable_fields = env_from_parseable(&fields);
-
-    // Build the output, possibly using quasi-quotation
-    let expanded = quote! {
-        impl #name {
-            #from_env
-
-            /// Modifies the config using environment variables with the default prefix.
-            /// Returns whether or not the structure was modified.
-            /// # Errors
-            /// Returns an error if any variables could not be read.
-            pub fn load_environment(&mut self) -> ::std::result::Result<bool, ::std::string::String> {
-                self.load_environment_with_prefix(#prefix)
-            }
-
-            /// Modifies the config using environment variables with a given prefix.
-            /// Returns whether or not the structure was modified.
-            /// # Errors
-            /// Returns an error if any variables could not be read.
-            pub fn load_environment_with_prefix(&mut self, prefix: &str) -> ::std::result::Result<bool, ::std::string::String> {
-                // Tracks whether or not a variable was found.
-                // Important for nested extendables.
-                let mut found_match = false;
-                #parseable_fields
-                ::std::result::Result::Ok(found_match)
-            }
-        }
-    };
-
-    // Hand the output tokens back to the compiler
-    expanded.into()
+/// A missing environment variable is *not* considered an Error.
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum FromEnvError {
+    /// Thrown when an environment variable was found, but was not valid unicode.
+    #[error("environment variable {0} was not valid unicode: {1:?}")]
+    NotUnicode(String, OsString),
+    /// Thrown when a unicode environment variable was found, but it could not be parsed.
+    #[error("failed to parse environment variable {0}: {1}")]
+    ParseError(String, String),
 }
 
-fn to_variable(field: &&EnvFieldArgs) -> String {
-    field
-        .ident
-        .clone()
-        .unwrap()
-        .to_string()
-        .to_case(Case::UpperSnake)
+/// The result of [`FromEnv::with_env`].
+pub type Result<T> = std::result::Result<T, FromEnvError>;
+
+/// Denotes a type that may be read from an environment variable.
+pub trait FromEnv: Sized {
+    /// Reads and parses an environment variable.
+    /// Returns `Ok(true)` if an environment variable was found and used, and `Ok(false)` if it was absent.
+    ///
+    /// # Errors
+    ///
+    /// Throws an error if the environment variable could not be read or parsed;
+    fn with_env(&mut self, var: &str) -> Result<bool>;
 }
 
-fn to_field(field: &&EnvFieldArgs) -> Ident {
-    field.ident.clone().unwrap()
+/// Helper type for mainting a no-alloc string representation.
+#[derive(Debug)]
+struct DigitContainer {
+    // This could be improved slightly by using `ascii::Char` with `from_u8_unchecked`,
+    // but at the time of writing this requires nightly (and the obvious `unsafe` block).
+    digits: [u8; usize::MAX.ilog10() as usize],
 }
 
-fn get_type(f: &EnvFieldArgs) -> String {
-    if let Type::Path(TypePath { qself: _, path }) = &f.ty {
-        path.segments.first().unwrap().ident.to_string()
-    } else {
-        String::new()
+impl DigitContainer {
+    fn new() -> Self {
+        let mut digits: [u8; usize::MAX.ilog10() as usize] = [0; usize::MAX.ilog10() as usize];
+        digits[0] = 1;
+        Self { digits }
+    }
+
+    fn next(&mut self, s: &mut String) {
+        let mut digit_iter = self.digits.into_iter().rev();
+
+        while let Some(digit) = digit_iter.next() {
+            if digit != 0 {
+                s.push((digit + b'0').into());
+
+                for digit in digit_iter {
+                    s.push((digit + b'0').into());
+                }
+                break;
+            }
+        }
+
+        for digit in &mut self.digits {
+            *digit += 1;
+            if *digit != 10 {
+                break;
+            } else {
+                *digit = 0
+            }
+        }
     }
 }
 
-fn env_from_parseable(fields: &[&EnvFieldArgs]) -> TokenStream {
-    let mut tokens = TokenStream::new();
+/// Automatically implements [`FromEnv`] using the type's [`FromStr`] implementation.
+#[macro_export]
+macro_rules! impl_using_from_str {
+    ($type:ty) => {
+        impl FromEnv for $type {
+            fn with_env(&mut self, var: &str) -> ::std::result::Result<bool, FromEnvError> {
+                use std::env;
 
-    for field in fields {
-        let ty = get_type(field);
-        let f = to_field(field);
-        let var = to_variable(field);
-
-        // This is made a lot more complicated by the fact that we very little information about the types we recieve.
-        // At best, we can guess using the first segment of the type path.
-        match (field, ty.as_str()) {
-            // Ignored fields
-            (EnvFieldArgs { ignore: true , .. }, _) => {}
-            // Vector & Nested
-            (EnvFieldArgs { nested: true, .. }, "Vec") => tokens.extend(quote! {
-                for i in 0.. {
-                    let underscore_var = &::std::format!("{prefix}{}__{i}__", #var);
-
-                    self.#f.extend([Default::default()]);
-
-                    if self.#f.last_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
-                        found_match = true;
-                    } else {
-                        self.#f.pop();
-                        break;
+            	match ::std::env::var(var) {
+            		Ok(s) => {
+                        *self = s.parse().map_err(|msg: <$type as FromStr>::Err| FromEnvError::ParseError(var.to_string(), msg.to_string()))?;
+                        Ok(true)
                     }
-                }
-            }),
-            (EnvFieldArgs { .. }, "Vec") => tokens.extend(quote! {
-                for i in 0.. {
-                    let underscore_var = &::std::format!("{prefix}{}__{i}", #var);
-
-                    if let ::std::result::Result::Ok(variable) = ::std::env::var(underscore_var) {
-                        match variable.parse() {
-                            ::std::result::Result::Ok(value) => {
-                                self.#f.push(value);
-                                found_match = true;
-                            }
-                            ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{}: {}", underscore_var, msg.to_string())),
-                        }
-                    } else {
-                        break;
-                    }
-                }
-            }),
-            // Optional & Nested
-            (EnvFieldArgs { nested: true, .. }, "Option") => tokens.extend(quote! {
-                let colon_var = ::std::format!("{prefix}{}:", #var);
-                let underscore_var = ::std::format!("{prefix}{}__", #var);
-                if let Some(field) = &mut self.#f {
-                    if field.load_environment_with_prefix(&colon_var)? || self.#f.as_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
-                        found_match = true;
-                    }
-                } else {
-                    self.#f = Some(Default::default());
-                    if self.#f.as_mut().unwrap().load_environment_with_prefix(&colon_var)? || self.#f.as_mut().unwrap().load_environment_with_prefix(&underscore_var)? {
-                        found_match = true;
-                    } else {
-                        self.#f = None;
-                    }
-                }
-            }),
-            // Optional & Parseable
-            (EnvFieldArgs { nested: false, .. }, "Option") => tokens.extend(quote! {
-                let name = ::std::format!("{prefix}{}", #var);
-
-                if let ::std::result::Result::Ok(variable) = ::std::env::var(&name) {
-                    match variable.parse() {
-                        ::std::result::Result::Ok(value) => {
-                            found_match = true;
-                            self.#f = Some(value);
-                        }
-                        ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{name}: {msg}")),
-                    }
-                }
-            }),
-            // Nested
-            (EnvFieldArgs { nested: true, .. }, _) => tokens.extend(quote! {
-                let underscore_var = ::std::format!("{prefix}{}__", #var);
-
-                if self.#f.load_environment_with_prefix(&underscore_var)? {
-                    found_match = true;
-                }
-            }),
-            // Parseable
-            (EnvFieldArgs { .. }, _) => tokens.extend(quote! {
-                let name = ::std::format!("{prefix}{}", #var);
-
-                if let ::std::result::Result::Ok(variable) = ::std::env::var(&name) {
-                    match variable.parse() {
-                        ::std::result::Result::Ok(value) => {
-                            found_match = true;
-                            self.#f = value;
-                        }
-                        ::std::result::Result::Err(msg) => return ::std::result::Result::Err(::std::format!("{name}: {msg}")),
-                    }
-                }
-            }),
+            		Err(env::VarError::NotPresent) => Ok(false),
+            		Err(env::VarError::NotUnicode(s)) => Err(FromEnvError::NotUnicode(var.to_string(), s)),
+            	}
+            }
         }
-    }
+    };
+    ($($type:ty),+$(,)?) => {
+		$(
+			impl_using_from_str!($type);
+		)+
+    };
+}
 
-    tokens
+impl_using_from_str! {
+    u8, u16, u32, u64, u128,
+    i8, i16, i32, i64, i128,
+    bool, String, PathBuf,
+}
+
+impl<T: FromEnv + Default> FromEnv for Option<T> {
+    fn with_env(&mut self, var: &str) -> Result<bool> {
+        let mut contents = T::default();
+
+        let result = contents.with_env(var);
+
+        if matches!(result, Ok(true)) {
+            *self = Some(contents);
+        }
+
+        result
+    }
+}
+
+impl<T: FromEnv + Default> FromEnv for Vec<T> {
+    fn with_env(&mut self, prefix: &str) -> Result<bool> {
+        // Working environment variable.
+        let mut var = format!("{prefix}_0");
+
+        // Special-case first element; if this is present, so is the vector.
+        let mut contents = T::default();
+        let mut v = if contents.with_env(&var)? {
+            vec![contents]
+        } else {
+            return Ok(false);
+        };
+
+        // Counter as a string.
+        // This is done on the stack to avoid allocations.
+        let mut digits = DigitContainer::new();
+
+        loop {
+            // Rebuild var with no allocations.
+            // (This isn't actually realloc-free; the string may overflow if the digit value becomes too large).
+            // Truncate only modifies the "size" field, meaning we keep our allocated memory.
+            var.truncate(prefix.len() + 1);
+            // Then the previous digits are overwritten.
+            digits.next(&mut var);
+
+            let mut contents = T::default();
+            if contents.with_env(&var)? {
+                v.push(contents);
+            } else {
+                break;
+            }
+        }
+
+        *self = v;
+
+        Ok(true)
+    }
 }
