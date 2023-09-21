@@ -11,7 +11,7 @@ If a certain field should not be configurable via environment variables, mark it
 
 Creating a config structure:
 
-```
+```rust
 use derive_environment::FromEnv;
 
 #[derive(Default, FromEnv)]
@@ -30,7 +30,7 @@ config.with_env("MY_CONFIG").unwrap();
 
 Nesting fields:
 
-```
+```rust
 use derive_environment::FromEnv;
 
 #[derive(FromEnv)]
@@ -51,7 +51,7 @@ Generates:
 
 Vector of Nested fields:
 
-```
+```rust
 use derive_environment::FromEnv;
 
 // `Vec`'s `FromEnv` implementation requires `Default`.
