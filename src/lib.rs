@@ -4,6 +4,9 @@
 pub use derive_environment_macros::FromEnv;
 use std::{ffi::OsString, path::PathBuf, str::FromStr};
 
+#[cfg(feature = "encoding_rs")]
+mod encoding;
+
 /// Errors generated when populating a structure from the environment.
 ///
 /// A missing environment variable is *not* considered an Error.
